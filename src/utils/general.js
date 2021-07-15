@@ -120,7 +120,7 @@ const handlePlatformSaveDialog = (zipLocation, filename) => new Promise((resolve
     )
       .then(({ canceled, filePath }) => {
         if (canceled) {
-          resolve();
+          resolve(true);
         }
 
         copy(zipLocation, filePath)
@@ -146,6 +146,28 @@ const handlePlatformSaveDialog = (zipLocation, filename) => new Promise((resolve
   }
 });
 
+// The idea behind this is to allow for an event listener to be attached to
+// an object property which fires when it changes.
+class ObservableValue {
+  constructor(value) {
+    this.valueInternal = value;
+    this.valueListener = () => {};
+  }
+
+  set value(val) {
+    this.valueInternal = val;
+    this.valueListener(val);
+  }
+
+  get value() {
+    return this.valueInternal;
+  }
+
+  registerListener(listener) {
+    this.valueListener = listener;
+  }
+}
+
 module.exports = {
   escapeFilePart,
   extensionPattern,
@@ -158,4 +180,5 @@ module.exports = {
   sleep,
   randomFail,
   handlePlatformSaveDialog,
+  ObservableValue,
 };

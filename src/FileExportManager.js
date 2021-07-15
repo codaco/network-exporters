@@ -18,7 +18,11 @@ const {
   unionOfNetworks,
 } = require('./formatters/network');
 const {
-  verifySessionVariables, getFilePrefix, sleep, handlePlatformSaveDialog,
+  verifySessionVariables,
+  getFilePrefix,
+  sleep,
+  handlePlatformSaveDialog,
+  ObservableValue,
 } = require('./utils/general');
 const archive = require('./utils/archive');
 const { ExportError, ErrorMessages } = require('./errors/ExportError');
@@ -151,6 +155,8 @@ class FileExportManager {
       const succeeded = [];
       const failed = [];
 
+      const consideringCancel = new ObservableValue(false);
+
       const shouldContinue = () => !cancelled;
 
       // Main work of the process happens here
@@ -159,7 +165,7 @@ class FileExportManager {
           // Short delay to give consumer UI time to render
           .then(sleep(1000))
           .then(() => {
-            if (cancelled) {
+            if (!shouldContinue()) {
               throw new UserCancelledExport();
             }
           })
@@ -175,7 +181,7 @@ class FileExportManager {
           .then((sessionsWithResequencedIDs) => groupBy(sessionsWithResequencedIDs, `sessionVariables.${protocolProperty}`))
           // Then, process the union option
           .then((sessionsByProtocol) => {
-            if (cancelled) {
+            if (!shouldContinue()) {
               throw new UserCancelledExport();
             }
 
@@ -187,7 +193,7 @@ class FileExportManager {
             return unionOfNetworks(sessionsByProtocol);
           })
           .then((unifiedSessions) => {
-            if (cancelled) {
+            if (!shouldContinue()) {
               throw new UserCancelledExport();
             }
 
@@ -295,7 +301,7 @@ class FileExportManager {
           })
           // Then, Zip the result.
           .then(({ exportedPaths, failedExports }) => {
-            if (cancelled) {
+            if (!shouldContinue()) {
               throw new UserCancelledExport();
             }
 
@@ -328,7 +334,7 @@ class FileExportManager {
             );
           })
           .then((zipLocation) => {
-            if (cancelled) {
+            if (!shouldContinue()) {
               throw new UserCancelledExport();
             }
 
@@ -336,20 +342,38 @@ class FileExportManager {
             return zipLocation;
           })
           .then((zipLocation) => {
-            if (cancelled) {
-              throw new UserCancelledExport();
-            }
-            return handlePlatformSaveDialog(
-              zipLocation,
-              sanitizeFilename(this.exportOptions.globalOptions.exportFilename),
-            );
-          })
-          .then(() => {
-            if (cancelled) {
+            if (!shouldContinue()) {
               throw new UserCancelledExport();
             }
 
-            this.emit('finished', ProgressMessages.Finished);
+            // If the user is considering aborting, don't show the save dialog
+            const waitWhileConsideringAbort = () => new Promise((resolve, reject) => {
+              const resolveWhenReady = (value) => {
+                if (!shouldContinue()) { reject(); }
+                if (value === false) { resolve(); }
+              };
+
+              // Attach a value change listener to our ObservableProperty
+              consideringCancel.registerListener(resolveWhenReady);
+
+              // Call test once on first run
+              resolveWhenReady(consideringCancel.value);
+            });
+
+            return waitWhileConsideringAbort().then(() => handlePlatformSaveDialog(
+              zipLocation,
+              sanitizeFilename(this.exportOptions.globalOptions.exportFilename),
+            ));
+          })
+          .then((saveCancelled) => {
+            if (!shouldContinue()) {
+              throw new UserCancelledExport();
+            }
+
+            if (!saveCancelled) {
+              this.emit('finished', ProgressMessages.Finished);
+            }
+
             cleanUp();
             resolveRun();
           })
@@ -366,7 +390,7 @@ class FileExportManager {
       const abort = () => {
         // eslint-disable-next-line no-console
         console.info('Aborting file export.');
-        if (cancelled) {
+        if (!shouldContinue()) {
           // eslint-disable-next-line no-console
           console.warn('This export already aborted. Cancelling abort!');
           return;
@@ -374,7 +398,11 @@ class FileExportManager {
         cancelled = true;
       };
 
-      resolveExportPromise({ run, abort });
+      const setConsideringAbort = (value) => {
+        consideringCancel.value = value;
+      };
+
+      resolveExportPromise({ run, abort, setConsideringAbort });
     });
   }
 }
